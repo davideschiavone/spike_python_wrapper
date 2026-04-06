@@ -212,6 +212,20 @@ public:
         return cpu->get_state()->FPR[i].v[0];
     }
 
+    std::vector<uint8_t> get_vec_reg(int i) {
+        std::vector<uint8_t> reg_data;
+        if (i < 0 || i >= 32 || !sim->get_core(0)) return reg_data;
+
+        size_t vlenb = sim->get_core(0)->VU.vlenb;
+        reg_data.resize(vlenb);
+
+        uint8_t* start_ptr = (uint8_t*)sim->get_core(0)->VU.reg_file + (i * vlenb);
+
+        std::copy(start_ptr, start_ptr + vlenb, reg_data.begin());
+
+        return reg_data;
+    }
+
     size_t get_vlen() {
         if (sim && sim->get_core(0)) {
             return sim->get_core(0)->VU.get_vlen();        }
@@ -262,6 +276,7 @@ PYBIND11_MODULE(spike_py, m) {
         .def("get_pc", &SpikeBridge::get_pc)
         .def("get_reg", &SpikeBridge::get_reg)
         .def("get_fp_reg", &SpikeBridge::get_fp_reg)
+        .def("get_vec_reg", &SpikeBridge::get_vec_reg)
         .def("get_vlen", &SpikeBridge::get_vlen)
         .def("get_elen", &SpikeBridge::get_elen)
         .def("get_disasm", &SpikeBridge::get_disasm)
