@@ -118,9 +118,9 @@ public:
             }
             std::cout << "===========================================================" << std::endl;
 
-
+#ifdef SPIKE_WRAPPER_DEBUG
             this->dump_memory(0x80000000, 6); // Dump first 6 words of RAM to verify loading
-
+#endif
             cpu = sim->get_core(0);
             // in case you want to skip the bootloader
             // cpu->get_state()->pc = 0x80000000;

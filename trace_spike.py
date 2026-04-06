@@ -11,42 +11,25 @@ ABI = [
     "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
 ]
 
-def run_trace(elf_path, max_steps=100):
+def run_trace(target, max_steps=100):
     print(f"\n{'='*95}")
-    print(f" SPIKE TRACER (RVA23) - Analisi di: {elf_path}")
+    print(f" SPIKE TRACER - Running : {target}")
     print(f"{'='*95}\n")
     
     try:
-        # Inizializziamo il simulatore tramite il wrapper C++
-        sim = spike_py.SpikeBridge(elf_path)
-        
-        # Vediamo se arriviamo qui
-        print(f"[*] PC iniziale: {hex(sim.get_pc())}")
 
-        print("Checking RAM state:")
+        sim = spike_py.SpikeBridge(target)
+        
+        print(f"[*] Initial PC: {hex(sim.get_pc())}")
+
+        print("[*] Checking RAM state:")
         sim.dump_memory(0x00001000, 4)
 
-        for step in range(1, 20):
-            pc = sim.get_pc()
-            # Proviamo a disassemblare prima dello step
-            try:
-                instr = sim.get_disasm()
-            except Exception as e:
-                print(f"\n[CRASH DISASM] PC {hex(pc)}: Impossibile leggere istruzione. Errore: {e}")
-                break
-
-            try:
-                sim.step()
-                print(f"{step:2d} | {hex(pc):<10} | {instr.strip()}")
-            except RuntimeError as e:
-                print(f"\n[CRASH EXEC] PC {hex(pc)}: Eccezione durante l'esecuzione!")
-                print(f"Dettaglio Spike: {e}")
-                break
-
-
-        # Stato iniziale dei registri
+        print("[*] Checking RF state:")
         last_regs = [sim.get_reg(i) for i in range(32)]
-        
+        for i, val in enumerate(last_regs):
+            print(f"  {ABI[i]:>4}: {hex(val)}")
+
         print(f"{'ORD':<4} | {'PC':<12} | {'INSTRUCTION':<28} | {'REGISTER CHANGES'}")
         print("-" * 95)
 
@@ -54,10 +37,10 @@ def run_trace(elf_path, max_steps=100):
             current_pc = sim.get_pc()
             instr_str = sim.get_disasm().strip()
             
-            # Esecuzione istruzione
+            # execute one istruction
             sim.step()
             
-            # Controllo cambiamenti
+            # check changes in registers
             changes = []
             for i in range(32):
                 new_val = sim.get_reg(i)
@@ -70,11 +53,11 @@ def run_trace(elf_path, max_steps=100):
 
             # Se il PC non avanza, stop
             if sim.get_pc() == current_pc:
-                print("\n[STOP] Rilevato loop infinito o stop del simulatore.")
+                print("\n[STOP] Instruction loop detected or simulation stopped.")
                 break
 
     except Exception as e:
-        print(f"\n[ERRORE]: {e}")
+        print(f"\n[ERROR]: {e}")
         traceback.print_exc()
     
     print(f"\n{'='*95}")
