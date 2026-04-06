@@ -85,14 +85,39 @@ def print_state(bridge):
         print(f"{name:10} (0x{addr:03x}): 0x{val:x}")
 
 def run_trace(target, max_steps=100):
+
+    #add missing PMP address CSRs to the map
+    for i in range(4, 64):
+        RISCV_CSR_MAP[0x3B0 + i] = f"pmpaddr{i}"
+    # add missing performance monitoring counters to the map
+    for i in range(3, 32):
+        RISCV_CSR_MAP[0xB00 + i] = f"mhpmcounter{i}"
+    # add missing pmpcfg0 - pmpcfg15 (0x3A0 - 0x3AF)
+    for i in range(16):
+        RISCV_CSR_MAP[0x3A0 + i] = f"pmpcfg{i}"
+    #add missing pmpaddr0 - pmpaddr63 (0x3B0 - 0x3FF)
+    for i in range(64):
+        RISCV_CSR_MAP[0x3B0 + i] = f"pmpaddr{i}"
+
+    # add Event Selectors (mhpmevent3 to mhpmevent31)
+    for i in range(3, 32):
+        if 0x320 + i not in RISCV_CSR_MAP:
+            RISCV_CSR_MAP[0x320 + i] = f"mhpmevent{i}"
+
+
     print(f"\n{'='*95}")
     print(f" SPIKE TRACER - Running : {target}")
     print(f"{'='*95}\n")
-    
+
     try:
 
         sim = spike_py.SpikeBridge(target)
         
+        print("SPIKE Vector Unit Info:")
+        print(f"  VLEN: {sim.get_vlen()} bits")
+        print(f"  ELEN: {sim.get_elen()} bits")
+
+
         print(f"[*] Initial PC: {hex(sim.get_pc())}")
 
         print("[*] Checking RAM state:")
@@ -162,24 +187,6 @@ def check_files(target):
         )
 
 if __name__ == "__main__":
-
-    #add missing PMP address CSRs to the map
-    for i in range(4, 64):
-        RISCV_CSR_MAP[0x3B0 + i] = f"pmpaddr{i}"
-    # add missing performance monitoring counters to the map
-    for i in range(3, 32):
-        RISCV_CSR_MAP[0xB00 + i] = f"mhpmcounter{i}"
-    # add missing pmpcfg0 - pmpcfg15 (0x3A0 - 0x3AF)
-    for i in range(16):
-        RISCV_CSR_MAP[0x3A0 + i] = f"pmpcfg{i}"
-    #add missing pmpaddr0 - pmpaddr63 (0x3B0 - 0x3FF)
-    for i in range(64):
-        RISCV_CSR_MAP[0x3B0 + i] = f"pmpaddr{i}"
-
-    # add Event Selectors (mhpmevent3 to mhpmevent31)
-    for i in range(3, 32):
-        if 0x320 + i not in RISCV_CSR_MAP:
-            RISCV_CSR_MAP[0x320 + i] = f"mhpmevent{i}"
 
     target = sys.argv[1] if len(sys.argv) > 1 else "test"
     try:

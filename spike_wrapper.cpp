@@ -5,6 +5,7 @@
 #include <riscv/disasm.h>
 #include <riscv/decode.h>
 #include <riscv/mmu.h>
+#include <riscv/vector_unit.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <vector>
@@ -59,6 +60,13 @@ public:
             // adding memory devices to the sim (Spike's internal mapping)
             sim->add_device(0x00001000, boot_mem);
             sim->add_device(0x80000000, ram_mem);
+
+            // Set VLEN and ELEN for all cores (even if we have only 1 core, this is the correct way to do it)
+            for (size_t i = 0; i < sim->nprocs(); i++) {
+                //default values in Spike are VLEN=128 and ELEN=64, but we want to set VLEN=256 for our tests
+                sim->get_core(i)->VU.VLEN = 256; // VLEN in bits
+                sim->get_core(i)->VU.ELEN = 64;  // ELEN in bits
+            }
 
             auto load_hex = [&](const std::string& path) {
                 std::ifstream file(path);
@@ -204,7 +212,20 @@ public:
         return cpu->get_state()->FPR[i].v[0];
     }
 
-void set_interrupt(bool high) {
+    size_t get_vlen() {
+        if (sim && sim->get_core(0)) {
+            return sim->get_core(0)->VU.get_vlen();        }
+        return 0;
+    }
+
+    size_t get_elen() {
+        if (sim && sim->get_core(0)) {
+            return sim->get_core(0)->VU.get_elen();
+        }
+        return 0;
+    }
+
+    void set_interrupt(bool high) {
         if (high)
             cpu->get_state()->mip->write_with_mask(MIP_MEIP, MIP_MEIP);
         else
@@ -241,6 +262,8 @@ PYBIND11_MODULE(spike_py, m) {
         .def("get_pc", &SpikeBridge::get_pc)
         .def("get_reg", &SpikeBridge::get_reg)
         .def("get_fp_reg", &SpikeBridge::get_fp_reg)
+        .def("get_vlen", &SpikeBridge::get_vlen)
+        .def("get_elen", &SpikeBridge::get_elen)
         .def("get_disasm", &SpikeBridge::get_disasm)
         .def("get_csrs", &SpikeBridge::get_all_csrs)
         .def("dump_memory", &SpikeBridge::dump_memory, "Dump n 32-bit words starting from addr",
