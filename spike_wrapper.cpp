@@ -156,9 +156,9 @@ public:
                 printf("  0x%08lx:  %08x\n", (unsigned long)current_addr, val);
 
             } catch (trap_t& t) {
-                printf("  0x%08lx:  [ERRORE] Trap: %s\n", (unsigned long)current_addr, t.name());
+                printf("  0x%08lx:  [ERROR] Trap: %s\n", (unsigned long)current_addr, t.name());
             } catch (...) {
-                printf("  0x%08lx:  [ERRORE] Access failed\n", (unsigned long)current_addr);
+                printf("  0x%08lx:  [ERROR] Access failed\n", (unsigned long)current_addr);
             }
         }
         std::cout << "===========================================================\n" << std::endl;
@@ -199,7 +199,12 @@ public:
         return cpu->get_state()->XPR[i];
     }
 
-    void set_interrupt(bool high) {
+    uint64_t get_fp_reg(int i) {
+        if (i < 0 || i >= 32) return 0;
+        return cpu->get_state()->FPR[i].v[0];
+    }
+
+void set_interrupt(bool high) {
         if (high)
             cpu->get_state()->mip->write_with_mask(MIP_MEIP, MIP_MEIP);
         else
@@ -235,6 +240,7 @@ PYBIND11_MODULE(spike_py, m) {
         .def("step", &SpikeBridge::step)
         .def("get_pc", &SpikeBridge::get_pc)
         .def("get_reg", &SpikeBridge::get_reg)
+        .def("get_fp_reg", &SpikeBridge::get_fp_reg)
         .def("get_disasm", &SpikeBridge::get_disasm)
         .def("get_csrs", &SpikeBridge::get_all_csrs)
         .def("dump_memory", &SpikeBridge::dump_memory, "Dump n 32-bit words starting from addr",

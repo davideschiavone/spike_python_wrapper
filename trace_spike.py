@@ -1,3 +1,4 @@
+import struct
 import spike_py
 import sys
 import traceback
@@ -20,7 +21,7 @@ RISCV_CSR_MAP = {
     0x100: "sstatus",   0x104: "sie",       0x105: "stvec",
     0x106: "scounteren",0x140: "sscratch",  0x141: "sepc",
     0x142: "scause",    0x143: "stval",     0x144: "sip",
-    0x180: "satp",
+    0x180: "satp",      0x10A: "senvcfg",
 
     # Machine-Level CSRs
     0x300: "mstatus",   0x301: "misa",      0x302: "medeleg",
@@ -37,18 +38,6 @@ RISCV_CSR_MAP = {
 
     # Performance Monitoring Counter Enablers
     0x320: "mcountinhibit", # Controls which counters can increment
-
-    # Event Selectors (mhpmevent3 to mhpmevent31)
-    0x323: "mhpmevent3",  0x324: "mhpmevent4",  0x325: "mhpmevent5",
-    0x326: "mhpmevent6",  0x327: "mhpmevent7",  0x328: "mhpmevent8",
-    0x329: "mhpmevent9",  0x32A: "mhpmevent10", 0x32B: "mhpmevent11",
-    0x32C: "mhpmevent12", 0x32D: "mhpmevent13", 0x32E: "mhpmevent14",
-    0x32F: "mhpmevent15", 0x330: "mhpmevent16", 0x331: "mhpmevent17",
-    0x332: "mhpmevent18", 0x333: "mhpmevent19", 0x334: "mhpmevent20",
-    0x335: "mhpmevent21", 0x336: "mhpmevent22", 0x337: "mhpmevent23",
-    0x338: "mhpmevent24", 0x339: "mhpmevent25", 0x33A: "mhpmevent26",
-    0x33B: "mhpmevent27", 0x33C: "mhpmevent28", 0x33D: "mhpmevent29",
-    0x33E: "mhpmevent30", 0x33F: "mhpmevent31",
 
     # Debug / Triggers
     0x7A0: "tselect",    0x7A1: "tdata1",     0x7A2: "tdata2",     0x7A3: "tdata3",
@@ -70,10 +59,21 @@ RISCV_CSR_MAP = {
     0xC22: "mhpmcounter4h",
 }
 
+def hex_to_float(h):
+    low_32 = h & 0xffffffff
+    return struct.unpack('!f', struct.pack('!I', low_32))[0]
+
+
 def print_state(bridge):
     print(f"--- GPRs ---")
     for i in range(32):
         print(f"x{i:02}: 0x{bridge.get_reg(i):016x}", end="  " if (i+1)%4 != 0 else "\n")
+
+    print(f"--- FPRs ---")
+    for i in range(32):
+        # print(f"fp{i:02}: 0x{bridge.get_fp_reg(i):016x}", end="  " if (i+1)%4 != 0 else "\n")
+        val = bridge.get_fp_reg(i)
+        print(f"f{i:02}: 0x{val:016x} ({hex_to_float(val):>8.4f})", end="  " if (i+1)%2 != 0 else "\n")
 
     print(f"\n--- CSRs ---")
     csrs = bridge.get_csrs() # This returns a dict {int: int}
@@ -175,6 +175,11 @@ if __name__ == "__main__":
     #add missing pmpaddr0 - pmpaddr63 (0x3B0 - 0x3FF)
     for i in range(64):
         RISCV_CSR_MAP[0x3B0 + i] = f"pmpaddr{i}"
+
+    # add Event Selectors (mhpmevent3 to mhpmevent31)
+    for i in range(3, 32):
+        if 0x320 + i not in RISCV_CSR_MAP:
+            RISCV_CSR_MAP[0x320 + i] = f"mhpmevent{i}"
 
     target = sys.argv[1] if len(sys.argv) > 1 else "test"
     try:
