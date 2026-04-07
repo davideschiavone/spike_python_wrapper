@@ -39,6 +39,12 @@ make -j16
 make test
 ```
 
+else:
+
+```
+make test MARCH="-march=rv32imfc_zicsr"
+```
+
 ## Compile C++ Spike Wrapper
 
 Make sure you have `pip install pybind11`
