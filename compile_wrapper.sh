@@ -21,13 +21,7 @@ echo "Spike Wrapper - Pybind11 Compilation"
 echo "=========================================================================="
 echo ""
 
-# Check for environment variables
-if [ -z "$HOME" ]; then
-    echo "[ERROR] \$HOME environment variable not set"
-    exit 1
-fi
-
-SPIKE_PATH="${HOME}/tools/spike"
+SPIKE_PATH="/home/${USER}/tools/spike"
 SPIKE_LIB_PATH="${SPIKE_PATH}/lib"
 SPIKE_INCLUDE_PATH="${SPIKE_PATH}/include"
 

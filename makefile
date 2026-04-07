@@ -160,7 +160,7 @@ spike_wrapper:
 
 clean:
 	@echo "[CLEAN] Removing generated files..."
-	rm -f test.elf test.bin test.dis test.hex spike_py.cpython-*.so
+	rm -f test.elf test.bin test.dis test.hex
 	@echo "[OK] Clean complete"
 
 # ============================================================================
