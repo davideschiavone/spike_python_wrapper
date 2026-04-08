@@ -6,28 +6,11 @@
 # No source files from cve2/ or spike_wrapper/ are recompiled here.
 #
 # Build order:
-#   1. cd ../cve2          && make lib        → build_cve2/libcve2_tb.a
-#                          && make build_lib  → build_cve2/libV*.a + libverilated.a
+#   1. cd ../cve2          && make cve2_lib   → build_cve2/.verilate_stamp
+#                                               build_cve2/libcve2_tb.a
+#                                               build_cve2/libV*.a + libverilated.a
 #   2. cd ../spike_wrapper && make lib        → libspike_wrapper.a
 #   3. cd ../cosim         && make cosim_tb
-#
-# Directory layout:
-#
-#   <root>/
-#     cve2/
-#       build_cve2/
-#         libcve2_tb.a          ← compiled from cve2_tb.cpp
-#         libVcve2_top.a        ← Verilated RTL
-#         libverilated.a        ← Verilator runtime
-#         Vcve2_top__ALL.a      ← Verilated RTL (all)
-#       cve2_tb.h               ← included for struct/class declarations
-#     spike_wrapper/
-#       libspike_wrapper.a      ← compiled from spike_wrapper.cpp
-#       spike_wrapper.h         ← included for SpikeBridge declaration
-#     cosim/
-#       cosim.h
-#       cosim.cpp
-#       cosim_main.cpp          ← this makefile lives here
 #
 # ============================================================================
 
@@ -39,11 +22,15 @@ SPIKE_WRAPPER_DIR := ../spike_wrapper
 CVE2_BUILD_DIR := $(CVE2_DIR)/build_cve2
 TOP_MODULE     := cve2_top
 
+# The stamp file is the authoritative signal that the Verilated model is fresh.
+# All library archives are produced by the same verilate step, so depending on
+# the stamp is sufficient — and it correctly goes stale when RTL changes.
+CVE2_VERILATE_STAMP := $(CVE2_BUILD_DIR)/.verilate_stamp
+
 CVE2_LIBS := \
     $(CVE2_BUILD_DIR)/libcve2_tb.a \
-    $(CVE2_BUILD_DIR)/libV$(TOP_MODULE).a \
-    $(CVE2_BUILD_DIR)/libverilated.a \
-    $(CVE2_BUILD_DIR)/V$(TOP_MODULE)__ALL.a
+    $(CVE2_BUILD_DIR)/V$(TOP_MODULE)__ALL.a \
+    $(CVE2_BUILD_DIR)/libverilated.a
 
 # --- Spike wrapper pre-built library ------------------------------------------
 SPIKE_WRAPPER_LIB := $(SPIKE_WRAPPER_DIR)/libspike_wrapper.a
@@ -99,30 +86,29 @@ help:
 	@echo "=========================================================================="
 	@echo ""
 	@echo "PREREQUISITES (run once before building cosim):"
-	@echo "  cd ../cve2          && build the libraries (like cve2_lib and verilated model)"
-	@echo "  cd ../spike_wrapper && make spike_wrapper_lib (build libspike_wrapper.a)"
+	@echo "  cd ../cve2          && make cve2_lib   (verilates + builds libcve2_tb.a)"
+	@echo "  cd ../spike_wrapper && make spike_wrapper_lib"
 	@echo ""
 	@echo "TARGETS:"
-	@echo "  cosim_tb            - Build co-simulation binary (no waveform)"
-	@echo "  cosim_tb_trace      - Build co-simulation binary (VCD waveform)"
-	@echo "  cosim_run           - Build and run  (set HEX=, PROGRAM=, ISA=)"
+	@echo "  cosim_tb            - Build co-simulation binary"
+	@echo "  cosim_run           - Build and run  (set PROGRAM=, ISA=)"
 	@echo "  cosim_run_verbose   - Build and run with per-instruction trace"
 	@echo "  clean               - Remove build artefacts"
 	@echo ""
 	@echo "EXAMPLES:"
 	@echo "  make cosim_tb"
-	@echo "  make cosim_run PROGRAM=../tests/build/test \\"
-	@echo "                 ISA=rv32imc"
-	@echo "  make cosim_run_verbose PROGRAM=../tests/build/test \\"
-	@echo "                         ISA=rv32imc"
+	@echo "  make cosim_run PROGRAM=../tests/build/test ISA=rv32imc MAX_INSTRUCTIONS=20"
+	@echo "  make cosim_run_verbose PROGRAM=../tests/build/test ISA=rv32imc MAX_INSTRUCTIONS=20"
 	@echo "=========================================================================="
 
 # ============================================================================
-# cosim_tb  –  no waveform
+# cosim_tb
 # ============================================================================
+# Explicitly depends on the verilate stamp so that stale RTL is detected
+# even when the library .a timestamps look up-to-date.
 
-cosim_tb: $(COSIM_SRCS) $(COSIM_HDRS) $(ALL_LIBS)
-	@echo "[BUILD] cosim_tb  (no trace)"
+cosim_tb: $(COSIM_SRCS) $(COSIM_HDRS) $(CVE2_VERILATE_STAMP) $(ALL_LIBS)
+	@echo "[BUILD] cosim_tb"
 	$(CXX) $(CXXFLAGS) \
 	    $(COSIM_SRCS) \
 	    -o cosim_tb \
@@ -134,15 +120,15 @@ cosim_tb: $(COSIM_SRCS) $(COSIM_HDRS) $(ALL_LIBS)
 # ============================================================================
 
 cosim_run: cosim_tb
-	./cosim_tb $(HEX) $(PROGRAM) $(ISA)
+	./cosim_tb $(PROGRAM) $(ISA) $(MAX_INSTRUCTIONS)
 
 cosim_run_verbose: cosim_tb
-	./cosim_tb $(HEX) $(PROGRAM) $(ISA) --verbose
+	./cosim_tb $(PROGRAM) $(ISA) $(MAX_INSTRUCTIONS) --verbose
 
 # ============================================================================
 # Clean
 # ============================================================================
 
 clean:
-	rm -f cosim_tb cosim_tb_trace
+	rm -f cosim_tb
 	@echo "[OK] cosim artefacts cleaned."

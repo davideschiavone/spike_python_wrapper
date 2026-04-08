@@ -25,10 +25,11 @@ V_FLAGS    := -Wall -cc --trace --trace-structs --trace-underscore \
 TRACE_SRC  := $(VROOT_INC)/verilated_vcd_c.cpp
 
 # --- Verilated library outputs -------------------------------------------------
+# Note: libV$(TOP_MODULE).a and V$(TOP_MODULE)__ALL.a are identical files
+# produced by Verilator --build. Only one is needed.
 VERILATED_LIBS := \
-    $(BUILD_DIR)/libV$(TOP_MODULE).a \
-    $(BUILD_DIR)/libverilated.a \
-    $(BUILD_DIR)/V$(TOP_MODULE)__ALL.a
+    $(BUILD_DIR)/V$(TOP_MODULE)__ALL.a \
+    $(BUILD_DIR)/libverilated.a
 
 # --- C++ compiler --------------------------------------------------------------
 CXX      ?= g++
@@ -39,6 +40,10 @@ CXXFLAGS  = -std=c++20 -O2 -Wall \
             -I$(VROOT_INC) \
             -I$(VROOT_INC)/vltstd \
             -I$(VROOT_INC)/gtkwave
+
+# --- Collect all RTL sources so that verilate reruns when they change ----------
+RTL_SRCS := $(wildcard $(CVE2_DIR)/rtl/*.sv) \
+            $(wildcard $(CVE2_DIR)/vendor/lowrisc_ip/ip/prim/rtl/*.sv)
 
 # ============================================================================
 # Phony targets
@@ -61,7 +66,11 @@ setup:
 	fi
 
 # --- 2. Verilate ---------------------------------------------------------------
-verilate: setup
+# Depends on all RTL .sv sources: any change to the RTL forces re-verilation.
+# The stamp file $(BUILD_DIR)/.verilate_stamp is touched on success so make
+# can track freshness without re-inspecting all library archives.
+
+$(BUILD_DIR)/.verilate_stamp: $(VC_FILE) $(RTL_SRCS) | setup
 	@echo "--- Verilating $(TOP_MODULE) ---"
 	@mkdir -p $(BUILD_DIR)
 	$(VERILATOR) $(V_FLAGS) \
@@ -69,17 +78,19 @@ verilate: setup
 		-f $(VC_FILE) \
 		--top-module $(TOP_MODULE) \
 		--build
-	@echo "--- Veriltion complete ---"
+	@touch $@
+	@echo "--- Verilaton complete ---"
+
+verilate: $(BUILD_DIR)/.verilate_stamp
 
 # --- 3. libcve2_tb.a  –  testbench static library ----------------------------
 #
-# Compiles cve2_tb.cpp into a static library so that downstream consumers
-# (cosim) can link against it without recompiling the source.
+# Depends on the verilate stamp so that any RTL change triggers full
+# re-verilation before the testbench library is (re-)compiled.
 #
 # Compiled WITH -DTRACE so the default library has waveforms.
-# TODO: optimize this by separating them into trace and non-trace versions if needed.
 
-$(BUILD_DIR)/libcve2_tb.a: cve2_tb.cpp cve2_tb.h $(VERILATED_LIBS)
+$(BUILD_DIR)/libcve2_tb.a: cve2_tb.cpp cve2_tb.h $(BUILD_DIR)/.verilate_stamp
 	@echo "[AR]  libcve2_tb.a"
 	$(CXX) $(CXXFLAGS) -c -DTRACE cve2_tb.cpp -o $(BUILD_DIR)/cve2_tb.o
 	$(AR) rcs $@ $(BUILD_DIR)/cve2_tb.o
@@ -125,7 +136,7 @@ view_trace:
 
 # --- Clean --------------------------------------------------------------------
 clean:
-	rm -rf $(BUILD_DIR) cve2_sim cve2_sim_trace $(BUILD_DIR)/libcve2_tb.a
+	rm -rf $(BUILD_DIR) cve2_sim cve2_sim_trace
 	@echo "Build directory cleaned."
 
 distclean: clean
