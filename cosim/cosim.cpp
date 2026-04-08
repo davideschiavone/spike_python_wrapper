@@ -69,11 +69,23 @@ void CoSimResult::print_summary() const {
 
 // ============================================================================
 // CoSim constructor
+//
+// Cve2Tb is constructed with the cosim-specific randomised bus delays
+// (COSIM_GNT_PROB_NUM/DEN and COSIM_MAX_RVALID_DELAY) so that lock-step
+// simulation exercises the RTL back-pressure handling.
+// The standalone cve2_sim and the Python binding use the default 0-delay
+// constructor, giving maximum throughput.
 // ============================================================================
 
 CoSim::CoSim(const CoSimConfig& cfg)
     : cfg_  (cfg)
-    , rtl_  (cfg.program_path + ".hex", cfg.boot_addr, cfg.max_cycles)
+    , rtl_  (cfg.program_path + ".hex",
+             cfg.boot_addr,
+             cfg.max_cycles,
+             /*rng_seed=*/42,
+             COSIM_GNT_PROB_NUM,
+             COSIM_GNT_PROB_DEN,
+             COSIM_MAX_RVALID_DELAY)
     , spike_(cfg.program_path.c_str(), cfg.isa.c_str())
 {
     std::cout << colour::CYAN << colour::BOLD
@@ -83,7 +95,9 @@ CoSim::CoSim(const CoSimConfig& cfg)
               << colour::RESET;
     std::cout << "  HEX    : " << cfg.program_path + ".hex" << "\n";
     std::cout << "  ELF    : " << cfg.program_path + ".elf" << "\n";
-    std::cout << "  ISA    : " << cfg.isa      << "\n\n";
+    std::cout << "  ISA    : " << cfg.isa      << "\n";
+    std::cout << "  Bus    : GNT=" << COSIM_GNT_PROB_NUM << "/" << COSIM_GNT_PROB_DEN
+              << "  RVALID_DELAY=0.." << COSIM_MAX_RVALID_DELAY << "\n\n";
 
     std::cout << colour::YELLOW << "[CoSim] Spike initial PC: 0x"
               << std::hex << std::setw(8) << std::setfill('0')
@@ -262,41 +276,5 @@ void CoSim::print_trace_line(uint64_t n, const RvfiInsn& rvfi,
 //
 // PYBIND11_MODULE(cosim_py, m) {
 //     m.doc() = "Spike × CVE2 lock-step co-simulation engine";
-//
-//     py::enum_<MismatchKind>(m, "MismatchKind")
-//         .value("PC",        MismatchKind::PC)
-//         .value("RD_WDATA",  MismatchKind::RD_WDATA)
-//         .value("MEM_ADDR",  MismatchKind::MEM_ADDR)
-//         .value("MEM_WDATA", MismatchKind::MEM_WDATA);
-//
-//     py::class_<MismatchRecord>(m, "MismatchRecord")
-//         .def_readonly("retired_count", &MismatchRecord::retired_count)
-//         .def_readonly("kind",          &MismatchRecord::kind)
-//         .def_readonly("rtl_val",       &MismatchRecord::rtl_val)
-//         .def_readonly("ref_val",       &MismatchRecord::ref_val)
-//         .def_readonly("pc_rdata",      &MismatchRecord::pc_rdata)
-//         .def_readonly("rd_addr",       &MismatchRecord::rd_addr)
-//         .def("to_string",              &MismatchRecord::to_string);
-//
-//     py::class_<CoSimConfig>(m, "CoSimConfig")
-//         .def(py::init<>())
-//         .def_readwrite("hex_path",              &CoSimConfig::hex_path)
-//         .def_readwrite("elf_path",              &CoSimConfig::elf_path)
-//         .def_readwrite("isa",                   &CoSimConfig::isa)
-//         .def_readwrite("max_retired",           &CoSimConfig::max_retired)
-//         .def_readwrite("max_cycles",            &CoSimConfig::max_cycles)
-//         .def_readwrite("verbose",               &CoSimConfig::verbose)
-//         .def_readwrite("stop_on_first_mismatch",&CoSimConfig::stop_on_first_mismatch);
-//
-//     py::class_<CoSimResult>(m, "CoSimResult")
-//         .def_readonly("retired_count",  &CoSimResult::retired_count)
-//         .def_readonly("rtl_cycles",     &CoSimResult::rtl_cycles)
-//         .def_readonly("mismatches",     &CoSimResult::mismatches)
-//         .def_readonly("halted_cleanly", &CoSimResult::halted_cleanly)
-//         .def_readonly("mismatch_log",   &CoSimResult::mismatch_log)
-//         .def("print_summary",           &CoSimResult::print_summary);
-//
-//     py::class_<CoSim>(m, "CoSim")
-//         .def(py::init<const CoSimConfig&>(), py::arg("config"))
-//         .def("run", &CoSim::run, "Run the lock-step co-simulation");
+// ...
 // }

@@ -34,6 +34,14 @@
 //  Branches / jumps: not compared directly; control-flow divergence
 //  is caught by the PC check on the next instruction.
 //
+// Bus timing for co-simulation
+// ────────────────────────────
+//   In lock-step mode we deliberately use randomised bus delays (the same
+//   values that existed before the runtime-configurable change) to ensure
+//   the RTL handles back-pressure correctly.  These are passed to Cve2Tb
+//   explicitly so that the default Cve2Tb constructor (used by cve2_sim and
+//   the Python binding) retains the fast 0-delay configuration.
+//
 // Pybind11 future binding
 // ────────────────────────
 //   CoSim is designed to be bound to Python with minimal friction.
@@ -74,6 +82,16 @@ static constexpr const char* ABI_NAMES[32] = {
     "a6","a7","s2","s3","s4","s5","s6","s7",
     "s8","s9","s10","s11","t3","t4","t5","t6"
 };
+
+// ============================================================================
+// Bus timing used for co-simulation (randomised back-pressure)
+// These values reproduce the original behaviour from before the
+// runtime-configurable constructor was introduced.
+// ============================================================================
+
+constexpr int COSIM_GNT_PROB_NUM     = 1;   // 1/2 probability of granting per cycle
+constexpr int COSIM_GNT_PROB_DEN     = 2;
+constexpr int COSIM_MAX_RVALID_DELAY = 3;   // up to 3 extra cycles GNT→RVALID
 
 // ============================================================================
 // MismatchKind

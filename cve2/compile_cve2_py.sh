@@ -5,18 +5,13 @@
 #
 # Produces:  cve2_py.cpython-*.so   (importable as `import cve2_py`)
 #
-# All Verilator-generated libraries (libverilated.a, V*__ALL.a) and the
-# testbench library (libcve2_tb.a) are already compiled with -fPIC because
-# the makefile passes -CFLAGS -fPIC to Verilator's --build and includes
-# -fPIC in CXXFLAGS.  This script therefore just compiles the thin pybind11
-# binding and links everything together — no recompilation needed.
+# The -DTRACE flag is read from build_cve2/cve2_tb_trace_flag.txt, which is
+# written by `make cve2_lib`.  This guarantees the struct layout seen by
+# cve2_pybind.cpp matches the layout compiled into libcve2_tb.a.
 #
 # Prerequisites:
 #   make verilate cve2_lib    (in cve2/)
 #   pip install pybind11
-#
-# Usage:
-#   sh compile_cve2_py.sh           (called by `make cve2_py`)
 #
 # ============================================================================
 
@@ -27,7 +22,6 @@ echo "CVE2 Python Module - Compilation"
 echo "=========================================================================="
 echo ""
 
-# ── Paths ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/build_cve2"
 TOP="${TOP_MODULE:-cve2_top}"
@@ -38,9 +32,18 @@ echo "[*] Script dir     : ${SCRIPT_DIR}"
 echo "[*] Build dir      : ${BUILD_DIR}"
 echo "[*] Top module     : ${TOP}"
 echo "[*] Verilator root : ${VERILATOR_ROOT}"
+
+# ── Read the TRACE flag that libcve2_tb.a was compiled with ───────────────────
+TRACE_FLAG_FILE="${BUILD_DIR}/cve2_tb_trace_flag.txt"
+if [ -f "${TRACE_FLAG_FILE}" ]; then
+    TRACE_FLAG=$(cat "${TRACE_FLAG_FILE}")
+else
+    TRACE_FLAG=""
+fi
+echo "[*] TRACE flag     : '${TRACE_FLAG}'"
 echo ""
 
-# ── Sanity checks ──────────────────────────────────────────────────────────
+# ── Sanity checks ─────────────────────────────────────────────────────────────
 if [ ! -f "${BUILD_DIR}/V${TOP}.h" ]; then
     echo "[ERROR] Verilated headers not found: ${BUILD_DIR}/V${TOP}.h"
     echo "        Please run:  make verilate   (in cve2/)"
@@ -53,7 +56,7 @@ if [ ! -f "${BUILD_DIR}/libcve2_tb.a" ]; then
     exit 1
 fi
 
-# ── Python / pybind11 ──────────────────────────────────────────────────────
+# ── Python / pybind11 ─────────────────────────────────────────────────────────
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 PYBIND11_INCLUDES=$(python3 -m pybind11 --includes)
 PYTHON_CONFIG_SUFFIX=$(python3-config --extension-suffix)
@@ -67,15 +70,13 @@ OUTPUT="${SCRIPT_DIR}/cve2_py${PYTHON_CONFIG_SUFFIX}"
 
 echo "[*] Cleaning old module..."
 rm -f "${SCRIPT_DIR}"/cve2_py.cpython-*.so
-echo "    Done"
-echo ""
 
-echo "[*] Compiling cve2_pybind.cpp and linking → $(basename ${OUTPUT}) ..."
+echo "[*] Compiling cve2_pybind.cpp → $(basename ${OUTPUT}) ..."
 echo ""
 
 g++ -shared -std=c++20 -O2 -Wall -fPIC \
     -DCVE2_WITH_PYBIND11 \
-    -DTRACE \
+    ${TRACE_FLAG} \
     ${PYBIND11_INCLUDES} \
     -I"${SCRIPT_DIR}" \
     -I"${BUILD_DIR}" \
