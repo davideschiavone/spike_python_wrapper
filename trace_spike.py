@@ -3,6 +3,58 @@ import sys
 import traceback
 import os
 
+# ============================================================================
+# libstdc++ preload — Anaconda / conda-forge compatibility fix
+# ============================================================================
+# Anaconda ships its own libstdc++.so.6 which is often older than the one
+# used to compile cve2_py.so (the system GCC).  When Python (from Anaconda)
+# dlopen()s cve2_py.so it resolves libstdc++ against Anaconda's copy first,
+# which may lack newer GLIBCXX_3.4.x symbols, producing:
+#
+#   version `GLIBCXX_3.4.32' not found
+#
+# Fix: preload the system libstdc++ with RTLD_GLOBAL *before* importing
+# cve2_py so the dynamic linker picks up the correct version.
+# We locate it via ldconfig rather than hard-coding a path.
+# This is a no-op on systems where Anaconda's libstdc++ is already new
+# enough, or where the user is not using Anaconda at all.
+
+def _preload_system_libstdcxx() -> None:
+    import ctypes
+    import ctypes.util
+    import subprocess
+
+    # First try the standard ctypes search (works when LD_LIBRARY_PATH is
+    # already pointing at the system lib).
+    path = ctypes.util.find_library("stdc++")
+    if path and "conda" not in path and "anaconda" not in path.lower():
+        try:
+            ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+            return
+        except OSError:
+            pass
+
+    # Fall back to asking ldconfig for the full path of the system libstdc++.
+    try:
+        out = subprocess.check_output(
+            ["ldconfig", "-p"], stderr=subprocess.DEVNULL, text=True
+        )
+        for line in out.splitlines():
+            if "libstdc++.so.6" in line and "=>" in line:
+                candidate = line.split("=>")[-1].strip()
+                # Skip anything inside conda/anaconda trees
+                if "conda" in candidate.lower() or "anaconda" in candidate.lower():
+                    continue
+                try:
+                    ctypes.CDLL(candidate, mode=ctypes.RTLD_GLOBAL)
+                    return
+                except OSError:
+                    continue
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass  # ldconfig not available (macOS, some containers) — silently skip
+
+_preload_system_libstdcxx()
+
 # Get the path to the folder containing spike_py.so
 wrapper_path = os.path.abspath("./spike_wrapper")
 
