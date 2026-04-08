@@ -1,0 +1,59 @@
+[*]
+[*] GTKWave Analyzer v3.3.116 (w)1999-2023 BSI
+[*] Wed Apr  8 06:08:48 2026
+[*]
+[dumpfile] "/home/schiavon/gitdir/spike_python_wrapper/cve2/cve2_wave.vcd"
+[dumpfile_mtime] "Wed Apr  8 05:59:27 2026"
+[dumpfile_size] 598960
+[savefile] "/home/schiavon/gitdir/spike_python_wrapper/cve2/cve2.gtkw"
+[timestart] 49
+[size] 1854 1121
+[pos] -1 -1
+*-4.016249 96 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] TOP.
+[treeopen] TOP.cve2_top.
+[treeopen] TOP.cve2_top.u_cve2_core.
+[treeopen] TOP.cve2_top.u_cve2_core.if_stage_i.
+[treeopen] TOP.cve2_top.u_cve2_core.if_stage_i.prefetch_buffer_i.
+[sst_width] 335
+[signals_width] 308
+[sst_expanded] 1
+[sst_vpaned_height] 338
+@28
+TOP.cve2_top.u_cve2_core.clk_i
+@800200
+-instr_bus
+@28
+TOP.cve2_top.u_cve2_core.instr_req_o
+TOP.cve2_top.u_cve2_core.instr_gnt_i
+TOP.cve2_top.u_cve2_core.instr_rvalid_i
+@22
+TOP.cve2_top.u_cve2_core.instr_addr_o[31:0]
+@28
+TOP.cve2_top.u_cve2_core.instr_err_i
+@22
+TOP.cve2_top.u_cve2_core.instr_rdata_i[31:0]
+@1000200
+-instr_bus
+@22
+TOP.cve2_top.u_cve2_core.id_stage_i.pc_id_i[31:0]
+@800200
+-data_bus
+@28
+TOP.cve2_top.u_cve2_core.data_req_o
+TOP.cve2_top.u_cve2_core.data_gnt_i
+TOP.cve2_top.u_cve2_core.data_rvalid_i
+@22
+TOP.cve2_top.u_cve2_core.data_addr_o[31:0]
+@28
+TOP.cve2_top.u_cve2_core.data_err_i
+@22
+TOP.cve2_top.u_cve2_core.data_rdata_i[31:0]
+TOP.cve2_top.u_cve2_core.data_be_o[3:0]
+TOP.cve2_top.u_cve2_core.data_wdata_o[31:0]
+@28
+TOP.cve2_top.u_cve2_core.data_we_o
+@1000200
+-data_bus
+[pattern_trace] 1
+[pattern_trace] 0

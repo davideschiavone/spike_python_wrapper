@@ -31,6 +31,7 @@ LIBS     = $(BUILD_DIR)/libV$(TOP_MODULE).a \
 CXX     ?= g++
 CXXFLAGS = -std=c++20 -O2 -Wall \
            -I$(BUILD_DIR) \
+		   -I./ \
            -I$(VROOT_INC) \
            -I$(VROOT_INC)/vltstd
 
@@ -76,7 +77,7 @@ cve2_tb: cve2_tb.cpp cve2_tb.h $(LIBS)
 
 cve2_tb_trace: cve2_tb.cpp cve2_tb.h $(LIBS)
 	@echo "[BUILD] cve2_tb_trace  (VCD trace enabled)"
-	$(CXX) $(CXXFLAGS) -DTRACE \
+	$(CXX) $(CXXFLAGS) -g -DTRACE \
 	    cve2_tb.cpp \
 	    $(TRACE_SRC) \
 	    -o cve2_tb_trace \
@@ -86,11 +87,14 @@ cve2_tb_trace: cve2_tb.cpp cve2_tb.h $(LIBS)
 	@echo "        Run it, then open cve2_wave.vcd in GTKWave"
 
 # ── Run targets ───────────────────────────────────────────────────────────────
-run: build
+run: cve2_tb
 	./cve2_tb $(HEX) $(MAX_CYCLES)
 
-run_trace: build_trace
+run_trace: cve2_tb_trace
 	./cve2_tb_trace $(HEX) $(MAX_CYCLES)
+
+view_trace:
+	gtkwave cve2_wave.vcd cve2.gtkw
 
 # 3. Build Lib: Just a wrapper for the build (Verilator --build handles the make)
 build_lib: verilate

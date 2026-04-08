@@ -2,3 +2,4 @@ build_cve2
 external
 cve2_tb
 cve2_tb_trace
+cve2_wave.vcd
