@@ -21,18 +21,28 @@ modern browser.  No external dependencies are required for the viewer.
 
 CVE2 Pipeline Stages (2-stage in-order pipeline)
 ──────────────────────────────────────────────────
-  IF  – Instruction Fetch
-  ID  – Instruction Decode + Execute
-  WB  – Write-Back / Retire
+  IF  – Instruction Fetch  (PC sent to I-cache / prefetch buffer)
+  IDX – Instruction Decode + Execute + Write-Back (retire)
 
-The CVE2 is a 2-stage pipeline (IF and ID/EX), so every instruction
-retires 2 cycles after being fetched (ideally, without stalls).
-We reconstruct approximate stage timing from the retirement cycle:
-  WB cycle  = retirement cycle (from RVFI)
-  ID cycle  = WB - 1
-  IF cycle  = WB - 2
-Stalls push WB further out; we detect stalls by comparing consecutive
-retirement cycles and mark the stall slots visually.
+The CVE2 is a 2-stage pipeline.  RVFI exposes only the retirement
+cycle, so we reconstruct stage entry times by working backwards:
+
+  IDX cycle = retirement cycle          (from RVFI rvfi_valid)
+  IF  cycle = IDX cycle - 1             (1 cycle earlier)
+
+Stall detection
+───────────────
+Stalls are inferred from the gap between consecutive retirement cycles:
+
+  stalls = retire[N] - retire[N-1] - 1
+
+On an ideal pipeline with IPC=1 every instruction retires 1 cycle
+after its predecessor, so delta=1 → 0 stalls.  A delta of 3 means
+2 stall cycles were inserted somewhere in the pipeline (load-use
+hazard, I-cache miss, taken branch flush, etc.).  The stall bar is
+drawn in the cycles between the previous IDX and this instruction's
+IF, giving a visually accurate picture of lost throughput.
+The first instruction has stalls=0 by definition (no predecessor).
 """
 
 import os
@@ -165,26 +175,40 @@ class Cve2Runner:
 # Pipeline reconstruction helpers
 # ============================================================================
 
-# CVE2 has 2 pipeline stages (IF, ID/EX+WB).
-# We approximate entry cycle of each stage from the retirement cycle.
-STAGE_NAMES = ["IF", "ID", "WB"]
+# CVE2 has 2 pipeline stages: IF and IDX (Decode + Execute + WB).
+# IDX is the retire stage — its cycle comes directly from RVFI.
+# IF is exactly 1 cycle before IDX on a stall-free pipeline.
+#
+# Stall logic
+# ───────────
+# RVFI gives us retire[N] for every instruction N.  On a perfect
+# IPC=1 pipeline retire[N] = retire[N-1] + 1.  Any extra cycles are
+# stalls:
+#
+#   stalls[N] = retire[N] - retire[N-1] - 1    (0 for the first insn)
+#
+# The stall bar is drawn in the gap between retire[N-1] and IF[N],
+# i.e. the cycles where the pipeline was not making forward progress.
+STAGE_NAMES = ["IF", "IDX"]
 STAGE_OFFSETS = {
-    "IF": -2,
-    "ID": -1,
-    "WB":  0,
+    "IF":  -1,   # 1 cycle before retire
+    "IDX":  0,   # retire cycle (RVFI)
 }
 
 
 def build_pipeline_data(log, total_cycles: int):
     """
-    Reconstruct approximate per-instruction pipeline timing.
+    Reconstruct per-instruction pipeline timing from the RVFI retirement log.
 
     Returns a list of dicts suitable for JSON serialisation:
       { pc, insn_hex, disasm_hint, order,
-        retire_cycle, stages: {IF: c, ID: c, WB: c},
+        retire_cycle, stages: {IF: c, IDX: c},
         stall_cycles: int,
         rd_name, rd_wdata, rs1_name, rs2_name,
         is_load, is_store, is_branch, is_trap }
+
+    Stall count = retire[N] - retire[N-1] - 1.
+    The stall bar occupies cycles [retire[N-1]+1 .. IF[N]-1].
     """
     instructions = []
     prev_retire = None
@@ -192,17 +216,18 @@ def build_pipeline_data(log, total_cycles: int):
     for entry in log:
         r = entry.rvfi
         retire = int(entry.cycle)
+
+        # ── Stall inference ───────────────────────────────────────────
+        # On a perfect IPC=1 pipeline consecutive retirements are 1
+        # cycle apart.  Every extra cycle beyond that is a stall.
         stalls = 0
         if prev_retire is not None:
-            # Ideal throughput: 1 retirement per cycle.
-            # Extra cycles indicate stalls (fetch miss, data dependency, etc.)
-            delta = retire - prev_retire
-            stalls = max(0, delta - 1)
+            stalls = max(0, retire - prev_retire - 1)
 
+        # ── Stage timing ──────────────────────────────────────────────
         stages = {
-            "IF": max(1, retire + STAGE_OFFSETS["IF"]),
-            "ID": max(1, retire + STAGE_OFFSETS["ID"]),
-            "WB": retire,
+            "IF":  max(1, retire + STAGE_OFFSETS["IF"]),
+            "IDX": retire,
         }
 
         insn = int(r.insn)
@@ -336,8 +361,7 @@ def generate_html(instructions, total_cycles: int, hex_path: str) -> str:
     # Colour palette for pipeline stages
     STAGE_COLOURS = {
         "IF":  "#4ade80",   # emerald green
-        "ID":  "#60a5fa",   # sky blue
-        "WB":  "#f472b6",   # pink
+        "IDX": "#60a5fa",   # sky blue
     }
     stage_colours_json = json.dumps(STAGE_COLOURS)
 
@@ -366,8 +390,7 @@ def generate_html(instructions, total_cycles: int, hex_path: str) -> str:
       --purple:      #bc8cff;
       --orange:      #ffa657;
       --if-color:    #4ade80;
-      --id-color:    #60a5fa;
-      --wb-color:    #f472b6;
+      --idx-color:   #60a5fa;
       --stall-color: #374151;
       --font-mono:   'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
       --font-ui:     'Inter', 'Segoe UI', system-ui, sans-serif;
@@ -754,9 +777,8 @@ def generate_html(instructions, total_cycles: int, hex_path: str) -> str:
       margin-right: 4px;
       margin-bottom: 4px;
     }}
-    .pill-IF {{ background: rgba(74,222,128,0.2); color: #4ade80; }}
-    .pill-ID {{ background: rgba(96,165,250,0.2); color: #60a5fa; }}
-    .pill-WB {{ background: rgba(244,114,182,0.2); color: #f472b6; }}
+    .pill-IF  {{ background: rgba(74,222,128,0.2); color: #4ade80; }}
+    .pill-IDX {{ background: rgba(96,165,250,0.2); color: #60a5fa; }}
 
     /* ── Stats bar ──────────────────────────────────────────────────  */
     #statsbar {{
@@ -807,8 +829,7 @@ def generate_html(instructions, total_cycles: int, hex_path: str) -> str:
       <div id="toolbar">
         <span class="toolbar-label">Stages:</span>
         <div class="legend-item"><div class="legend-swatch" style="background:#4ade80"></div>IF</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#60a5fa"></div>ID</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#f472b6"></div>WB</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:#60a5fa"></div>IDX</div>
         <div class="legend-item"><div class="legend-swatch" style="background:#374151"></div>Stall</div>
         &nbsp;
         <span class="toolbar-label">Filter:</span>
@@ -879,7 +900,7 @@ def generate_html(instructions, total_cycles: int, hex_path: str) -> str:
     const INSNS       = {data_json};
     const TOTAL_CYCLES = {total_cycles};
     const STAGE_COLORS = {stage_colours_json};
-    const STAGE_NAMES  = ["IF","ID","WB"];
+    const STAGE_NAMES  = ["IF","IDX"];
 
     // ── State ─────────────────────────────────────────────────────────────
     let cellW      = 28;   // px per cycle column
@@ -993,9 +1014,13 @@ def generate_html(instructions, total_cycles: int, hex_path: str) -> str:
             cr.dataset.idx = idx;
             cr.onclick = () => selectInsn(idx);
 
-            // Stall visualisation: fill gap before WB with stall marker
+            // Stall visualisation
+            // The stall bar sits in the gap between the previous instruction's
+            // IDX cycle and this instruction's IF cycle, i.e. the cycles where
+            // the pipeline was not making forward progress.
+            // stallStart = IDX[N] - stall_cycles  (= IF[N] - stall_cycles + 1... = prev IDX + 1)
             if(insn.stall_cycles > 0) {{
-                const stallStart = insn.stages.WB - insn.stall_cycles;
+                const stallStart = insn.stages.IDX - insn.stall_cycles;
                 const left = (stallStart - minCycle) * cellW;
                 const width = insn.stall_cycles * cellW - 2;
                 if(width > 0) {{
