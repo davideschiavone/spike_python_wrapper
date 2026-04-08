@@ -25,12 +25,14 @@ V_FLAGS    := -Wall -cc --trace --trace-structs --trace-underscore \
 TRACE_SRC  := $(VROOT_INC)/verilated_vcd_c.cpp
 
 # --- Verilated library outputs -------------------------------------------------
-LIBS := $(BUILD_DIR)/libV$(TOP_MODULE).a \
-        $(BUILD_DIR)/libverilated.a \
-        $(BUILD_DIR)/V$(TOP_MODULE)__ALL.a
+VERILATED_LIBS := \
+    $(BUILD_DIR)/libV$(TOP_MODULE).a \
+    $(BUILD_DIR)/libverilated.a \
+    $(BUILD_DIR)/V$(TOP_MODULE)__ALL.a
 
 # --- C++ compiler --------------------------------------------------------------
 CXX      ?= g++
+AR       ?= ar
 CXXFLAGS  = -std=c++20 -O2 -Wall \
             -I$(BUILD_DIR) \
             -I./ \
@@ -42,9 +44,9 @@ CXXFLAGS  = -std=c++20 -O2 -Wall \
 # Phony targets
 # ============================================================================
 
-.PHONY: all clean setup verilate build_lib help
+.PHONY: all clean setup verilate cve2_lib help
 
-all: build_lib
+all: verilate cve2_lib
 
 # --- 1. Clone CVE2 if needed --------------------------------------------------
 setup:
@@ -69,35 +71,44 @@ verilate: setup
 		--build
 	@echo "--- Veriltion complete ---"
 
-# --- 3. Build Verilated static libraries (alias) ------------------------------
-build_lib: verilate
-	@echo "--- Libraries ready in $(BUILD_DIR) ---"
+# --- 3. libcve2_tb.a  –  testbench static library ----------------------------
+#
+# Compiles cve2_tb.cpp into a static library so that downstream consumers
+# (cosim) can link against it without recompiling the source.
+#
+# Compiled WITH -DTRACE so the default library has waveforms.
+# TODO: optimize this by separating them into trace and non-trace versions if needed.
+
+$(BUILD_DIR)/libcve2_tb.a: cve2_tb.cpp cve2_tb.h $(VERILATED_LIBS)
+	@echo "[AR]  libcve2_tb.a"
+	$(CXX) $(CXXFLAGS) -c -DTRACE cve2_tb.cpp -o $(BUILD_DIR)/cve2_tb.o
+	$(AR) rcs $@ $(BUILD_DIR)/cve2_tb.o
+	@echo "[OK]  $(BUILD_DIR)/libcve2_tb.a"
+
+cve2_lib: $(BUILD_DIR)/libcve2_tb.a
 
 # ============================================================================
-# Standalone CVE2 simulation binary
-#   Source files:
-#     cve2_tb.cpp  – Cve2Memory / SlowBus / Cve2Tb implementations
-#     cve2_sim.cpp – main()
+# Standalone CVE2 simulation binary (developer convenience)
 # ============================================================================
 
-CVE2_SIM_SRCS := cve2_tb.cpp cve2_sim.cpp
-
-cve2_sim: $(CVE2_SIM_SRCS) cve2_tb.h $(LIBS)
+cve2_sim: cve2_sim.cpp cve2_tb.h $(BUILD_DIR)/libcve2_tb.a $(VERILATED_LIBS)
 	@echo "[BUILD] cve2_sim  (no trace)"
 	$(CXX) $(CXXFLAGS) \
-	    $(CVE2_SIM_SRCS) \
+	    cve2_sim.cpp \
 	    -o cve2_sim \
-	    $(LIBS) \
+	    $(BUILD_DIR)/libcve2_tb.a \
+	    $(VERILATED_LIBS) \
 	    -lpthread -lm -ldl
 	@echo "[OK]    cve2_sim"
 
-cve2_sim_trace: $(CVE2_SIM_SRCS) cve2_tb.h $(LIBS)
+cve2_sim_trace: cve2_sim.cpp cve2_tb.h $(BUILD_DIR)/libcve2_tb.a $(VERILATED_LIBS)
 	@echo "[BUILD] cve2_sim_trace  (VCD trace enabled)"
-	$(CXX) $(CXXFLAGS) -g -DTRACE \
-	    $(CVE2_SIM_SRCS) \
+	$(CXX) $(CXXFLAGS) -g \
+	    cve2_sim.cpp \
 	    $(TRACE_SRC) \
 	    -o cve2_sim_trace \
-	    $(LIBS) \
+	    $(BUILD_DIR)/libcve2_tb.a \
+	    $(VERILATED_LIBS) \
 	    -lpthread -lm -ldl
 	@echo "[OK]    cve2_sim_trace"
 	@echo "        Run it, then open cve2_wave.vcd in GTKWave"
@@ -114,7 +125,7 @@ view_trace:
 
 # --- Clean --------------------------------------------------------------------
 clean:
-	rm -rf $(BUILD_DIR) cve2_sim cve2_sim_trace cve2_wave.vcd
+	rm -rf $(BUILD_DIR) cve2_sim cve2_sim_trace $(BUILD_DIR)/libcve2_tb.a
 	@echo "Build directory cleaned."
 
 distclean: clean

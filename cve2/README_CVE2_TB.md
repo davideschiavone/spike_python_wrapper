@@ -18,17 +18,20 @@ make setup
 # verilate CVE2
 make verilate
 
+# creates the cve2 tb class library
+make cve2_lib
+
 # build TB no TRACE
 make cve2_sim
 
-# build TB with TRACE
+# or build TB with TRACE
 make cve2_sim_trace
 
 # Run
 make run HEX=../tests/build/test.hex
 
 # Build with VCD waveform output, then run
-make run_trace HEX=../tests/build/test.hex MAX_CYCLES=150
+make run_trace HEX=../tests/build/test.hex MAX_CYCLES=180
 
 # Open waveform
 make view_trace
