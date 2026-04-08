@@ -2,30 +2,46 @@
 // cve2_tb.h  –  Verilator Testbench for CVE2 (cve2_top) with RVFI
 // ============================================================================
 //
-// Bus protocol (GNT → RVALID minimum 1-cycle gap)
-// ─────────────────────────────────────────────────
+// Bus protocol  (mirrors x-heep slow_memory.sv)
+// ─────────────────────────────────────────────────────────────────────────────
 //
-//  Instruction fetch (instr_*)
+//  1. REQ is held by the CPU until GNT is received.
+//     GNT can arrive in the SAME cycle as REQ, or ANY later cycle.
+//     Each cycle a Bernoulli coin-flip (GNT_PROB_NUM/GNT_PROB_DEN) decides
+//     whether to grant the pending request.
 //
-//   clk   ─┐ ┌─┐ ┌─┐ ┌─┐ ┌─
-//           └─┘ └─┘ └─┘ └─┘
-//           N   N+1 N+2
-//   req_o  ─────────┐ idle ...
-//   addr_o ────[A]──┘
-//   gnt_i  ─────────┐     (asserted same cycle as req, de-asserted next)
-//                   └─────
-//   rvalid_i              ┌──── (exactly 1 cycle after gnt)
-//                         └────
-//   rdata_i               [mem[A]]
+//  2. RVALID arrives AT LEAST one cycle after the corresponding GNT.
+//     A random extra delay [0 .. MAX_RVALID_DELAY] is drawn at grant time
+//     and stored in a FIFO together with RDATA.  The FIFO head is ticked
+//     every cycle; when the countdown reaches 0 RVALID is asserted for
+//     exactly one cycle and the entry is popped.
 //
-//  Data bus (data_*) – identical timing.
-//  Writes are committed to memory at GNT time (data_wdata_o is stable).
-//  RVALID is still required for stores (core waits for it).
+//  3. Both buses are in-order (no transaction IDs) so FIFOs are sufficient.
+//
+//  4. GNT and RVALID MAY be asserted in the same cycle when they refer to
+//     DIFFERENT transactions.  The only constraint is that RVALID for
+//     transaction T cannot appear in the same cycle as GNT for transaction T.
+//     Example:
+//       Cycle N  : REQ(A) → gnt=1                    RVALID(A) comes later
+//       Cycle N+1: REQ(B) → gnt=1  AND rvalid=1(A)   ← perfectly legal
+//
+// Timeline example (GNT delayed 1 cycle, RVALID extra delay = 2):
+//
+//   Cycle N  : req=1 addr=A  gnt=0   rvalid=0        (coin said no)
+//   Cycle N+1: req=1 addr=A  gnt=1 ← granted         countdown = 1+2 = 3
+//   Cycle N+2: req=1 addr=B  gnt=1   rvalid=0        (A: countdown 3→2)
+//   Cycle N+3: req=0         gnt=0   rvalid=1(A)     (A: countdown 2→1→pop, B: 3→2)
+//   Cycle N+4: req=0         gnt=0   rvalid=1(B)     (B: countdown 2→1→pop)
 //
 // Memory map (must match linker script / Spike config)
 // ─────────────────────────────────────────────────────
 //   0x0000_1000  Boot ROM   4 KB
 //   0x8000_0000  RAM       16 MB
+//
+// Tuning knobs (see constants below)
+// ────────────────────────────────────
+//   GNT_PROB_NUM / GNT_PROB_DEN   probability of granting each cycle
+//   MAX_RVALID_DELAY               max extra cycles between GNT and RVALID
 //
 // Waveform tracing
 // ─────────────────
@@ -42,6 +58,8 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <queue>
+#include <random>
 #include <stdexcept>
 #include <string>
 
@@ -65,11 +83,28 @@ constexpr uint32_t RAM_BASE  = 0x8000'0000u;
 constexpr uint32_t RAM_SIZE  = 0x0100'0000u;   // 16 MB
 
 // Boot address driven to the CVE2 core.
-// CVE2 resets to (boot_addr_i), so first fetch = 0x8000_0000.
-// Adjust if your _start / _boot is mapped elsewhere.
+// CVE2 resets to (boot_addr_i), so first fetch = 0x0000_1000.
 constexpr uint32_t BOOT_ADDR = BOOT_BASE;
 
 constexpr uint8_t FETCH_ENABLE_ON = 0x1u;
+
+// ── Slow-bus tuning knobs ────────────────────────────────────────────────────
+//
+//  GNT probability per cycle = GNT_PROB_NUM / GNT_PROB_DEN
+//    1/1 → always grant immediately (zero extra latency on GNT)
+//    1/2 → 50 % chance per cycle  (default)
+//    1/4 → 25 % chance per cycle  (slow)
+//
+constexpr int GNT_PROB_NUM     = 1;
+constexpr int GNT_PROB_DEN     = 2;
+
+//  Extra cycles added on top of the mandatory 1-cycle GNT→RVALID gap.
+//  Drawn uniformly from [0 .. MAX_RVALID_DELAY].
+//    0 → RVALID always exactly 1 cycle after GNT  (minimum legal)
+//    3 → RVALID between 1 and 4 cycles after GNT  (default)
+//
+constexpr int MAX_RVALID_DELAY = 3;
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ============================================================================
 // vlwide_zero  –  zero a Verilator VlWide<N> packed-struct signal
@@ -77,12 +112,6 @@ constexpr uint8_t FETCH_ENABLE_ON = 0x1u;
 // Verilator maps SystemVerilog packed structs wider than 64 bits to
 // VlWide<N>, where N = ceil(total_bits / 32).  VlWide does not overload
 // operator=, so "signal = 0" fails to compile.
-//
-// Usage:
-//   vlwide_zero(dut_->x_result_i);     // works for any VlWide<N>
-//
-// The underlying storage is a plain C array of uint32_t words accessible
-// via VlWide::operator[](i), so we just iterate and zero each word.
 // ============================================================================
 
 template <std::size_t N>
@@ -103,25 +132,23 @@ class Cve2Memory {
 public:
     Cve2Memory()
         : boot_(std::make_unique<uint8_t[]>(BOOT_SIZE)),
-          ram_(std::make_unique<uint8_t[]>(RAM_SIZE))
+          ram_ (std::make_unique<uint8_t[]>(RAM_SIZE))
     {
-        // Zero-initialize both memory regions
         std::memset(boot_.get(), 0, BOOT_SIZE);
         std::memset(ram_.get(),  0, RAM_SIZE);
     }
 
     // Explicitly delete copy operations (unique_ptr is move-only)
-    Cve2Memory(const Cve2Memory&) = delete;
+    Cve2Memory(const Cve2Memory&)            = delete;
     Cve2Memory& operator=(const Cve2Memory&) = delete;
 
     // Enable move operations
-    Cve2Memory(Cve2Memory&&) noexcept = default;
+    Cve2Memory(Cve2Memory&&) noexcept            = default;
     Cve2Memory& operator=(Cve2Memory&&) noexcept = default;
 
     ~Cve2Memory() = default;
 
     // Load a Verilog objcopy hex file  (@ADDR / HEX_BYTE ... format)
-    // Same format as used by SpikeBridge::load_hex()
     void load_hex(const std::string& path) {
         std::ifstream f(path);
         if (!f.is_open())
@@ -138,7 +165,7 @@ public:
         std::cout << "[Cve2Memory] Loaded: " << path << "\n";
     }
 
-    // 32-bit little-endian read (for instruction fetch and data loads)
+    // 32-bit little-endian read
     uint32_t read32(uint32_t addr) const {
         return  static_cast<uint32_t>(read8(addr + 0))        |
                (static_cast<uint32_t>(read8(addr + 1)) <<  8) |
@@ -177,12 +204,11 @@ public:
     }
 
     // Direct access to memory regions (for advanced use cases)
-    uint8_t* boot_data() { return boot_.get(); }
-    uint8_t* ram_data()  { return ram_.get();  }
+    uint8_t*       boot_data()       { return boot_.get(); }
+    uint8_t*       ram_data()        { return ram_.get();  }
     const uint8_t* boot_data() const { return boot_.get(); }
     const uint8_t* ram_data()  const { return ram_.get();  }
 
-    // Memory region sizes
     static constexpr uint32_t boot_size() { return BOOT_SIZE; }
     static constexpr uint32_t ram_size()  { return RAM_SIZE;  }
 
@@ -219,6 +245,161 @@ struct RvfiInsn {
 };
 
 // ============================================================================
+// SlowBus  –  C++ model of one OBI-like bus with randomised GNT / RVALID
+// ============================================================================
+//
+//  Mirrors the behaviour of x-heep slow_memory.sv.
+//
+//  Internal state
+//  ──────────────
+//  req_pending_     : true while the CPU's current REQ has been seen but not
+//                     yet granted.  Prevents re-capturing the same transaction
+//                     while the CPU holds req=1 stable waiting for GNT.
+//
+//  rvalid_fifo_     : FIFO of { countdown, rdata } entries, one per granted
+//                     transaction.  Each entry's countdown is initialised to
+//                     (1 + random_extra) so RVALID always arrives at least one
+//                     cycle after the corresponding GNT.  The FIFO is drained
+//                     head-first every cycle; when countdown reaches 0 the
+//                     entry is popped and RVALID is raised for that cycle.
+//
+//  tick() algorithm (3 steps, called at negedge each cycle)
+//  ─────────────────────────────────────────────────────────
+//  A. Advance RVALID pipeline:
+//       Decrement rvalid_fifo_.front().countdown.
+//       If it hits 0 → pop, assert rvalid=1, drive rdata.
+//       Otherwise rvalid=0.
+//
+//  B. Capture new request:
+//       If req=1 and req_pending_=false, latch addr/we/be/wdata and set
+//       req_pending_=true.  (CPU holds signals stable until GNT.)
+//
+//  C. Attempt grant:
+//       If req_pending_, flip the coin.
+//       Heads → commit write to memory (wdata stable at GNT time),
+//               pre-fetch rdata for loads,
+//               push { 1 + random_extra, rdata } onto rvalid_fifo_,
+//               assert gnt=1, clear req_pending_.
+//       Tails → gnt=0, try again next cycle.
+//
+//  GNT and RVALID for the SAME transaction can never overlap because
+//  countdown ≥ 1.  GNT and RVALID from DIFFERENT transactions may overlap
+//  (step A pops an old entry while step C grants a new one in the same cycle).
+//
+// ============================================================================
+
+struct RvalidEntry {
+    int      countdown = 1;  ///< cycles remaining before RVALID fires (min 1)
+    uint32_t rdata     = 0;  ///< data to drive on rdata_i (0 for writes)
+};
+
+class SlowBus {
+public:
+    explicit SlowBus(const std::string& name,
+                     Cve2Memory&        mem,
+                     std::mt19937&      rng)
+        : name_       (name)
+        , mem_        (mem)
+        , rng_        (rng)
+        , gnt_dist_   (0, GNT_PROB_DEN - 1)
+        , delay_dist_ (0, MAX_RVALID_DELAY)
+    {}
+
+    // -------------------------------------------------------------------------
+    // tick()  –  drive one cycle of bus logic, called AT THE NEGATIVE EDGE.
+    //
+    // DUT outputs are read after they have settled following the falling edge.
+    // The resulting input values are driven and remain stable until the next
+    // rising edge, where the DUT latches them.
+    //
+    // Inputs  : current DUT output signals for this bus (stable post-negedge).
+    // Outputs : values to drive onto the corresponding DUT input signals.
+    // -------------------------------------------------------------------------
+    void tick(uint8_t   req_i,
+              uint32_t  addr_i,
+              uint8_t   we_i,
+              uint8_t   be_i,
+              uint32_t  wdata_i,
+              uint8_t&  gnt_o,
+              uint8_t&  rvalid_o,
+              uint32_t& rdata_o,
+              uint8_t&  err_o)
+    {
+        // ── A: advance the RVALID pipeline ──────────────────────────────
+        rvalid_o = 0;
+        rdata_o  = 0;
+        err_o    = 0;
+
+        if (!rvalid_fifo_.empty()) {
+            auto& head = rvalid_fifo_.front();
+            head.countdown--;
+            if (head.countdown == 0) {
+                rvalid_o = 1;
+                rdata_o  = head.rdata;
+                rvalid_fifo_.pop();
+            }
+        }
+
+        // ── B: capture new request (only once per transaction) ───────────
+        // The CPU holds req=1 and addr/we/be/wdata stable until it sees
+        // gnt=1, so we only need to latch once and re-use each tick.
+        if (req_i && !req_pending_) {
+            req_pending_   = true;
+            pending_addr_  = addr_i;
+            pending_we_    = static_cast<bool>(we_i);
+            pending_be_    = be_i;
+            pending_wdata_ = wdata_i;
+        }
+
+        // ── C: attempt to grant ──────────────────────────────────────────
+        gnt_o = 0;
+
+        if (req_pending_ && (gnt_dist_(rng_) < GNT_PROB_NUM)) {
+            // Commit writes at GNT time (wdata is stable)
+            if (pending_we_)
+                mem_.write32(pending_addr_, pending_wdata_, pending_be_);
+
+            // Pre-fetch rdata for loads (irrelevant for stores)
+            uint32_t rdata = pending_we_ ? 0u : mem_.read32(pending_addr_);
+
+            // Push into RVALID pipeline; mandatory 1-cycle gap enforced by
+            // initialising countdown to at least 1.
+            rvalid_fifo_.push({ 1 + delay_dist_(rng_), rdata });
+
+            gnt_o        = 1;
+            req_pending_ = false;  // CPU will de-assert req next cycle
+        }
+    }
+
+    // Reset internal state (call after DUT reset is released)
+    void reset() {
+        rvalid_fifo_   = {};
+        req_pending_   = false;
+        pending_addr_  = 0;
+        pending_we_    = false;
+        pending_be_    = 0;
+        pending_wdata_ = 0;
+    }
+
+private:
+    std::string    name_;
+    Cve2Memory&    mem_;
+    std::mt19937&  rng_;
+
+    std::uniform_int_distribution<int> gnt_dist_;    ///< coin for GNT
+    std::uniform_int_distribution<int> delay_dist_;  ///< extra RVALID delay
+
+    std::queue<RvalidEntry> rvalid_fifo_;  ///< granted txns waiting for RVALID
+
+    // Latched request (one outstanding at a time per OBI bus)
+    bool     req_pending_  = false;
+    uint32_t pending_addr_  = 0;
+    bool     pending_we_    = false;
+    uint8_t  pending_be_    = 0;
+    uint32_t pending_wdata_ = 0;
+};
+
+// ============================================================================
 // Cve2Tb  –  testbench wrapper around the Verilated CVE2 model
 // ============================================================================
 
@@ -226,14 +407,20 @@ class Cve2Tb {
 public:
     // -------------------------------------------------------------------------
     // Construction
-    //   hex_path  : Verilog hex file to load (test.hex)
-    //   boot_addr : driven to boot_addr_i on the DUT
-    //   max_cycles: hard simulation limit
+    //   hex_path   : Verilog hex file to load (test.hex)
+    //   boot_addr  : driven to boot_addr_i on the DUT
+    //   max_cycles : hard simulation limit
+    //   rng_seed   : seed for the random GNT / RVALID delay generator
     // -------------------------------------------------------------------------
     explicit Cve2Tb(const std::string& hex_path,
                     uint32_t           boot_addr  = BOOT_ADDR,
-                    uint64_t           max_cycles = 1'000'000ULL)
-        : boot_addr_(boot_addr), max_cycles_(max_cycles)
+                    uint64_t           max_cycles = 1'000'000ULL,
+                    uint32_t           rng_seed   = 42)
+        : boot_addr_(boot_addr)
+        , max_cycles_(max_cycles)
+        , rng_(rng_seed)
+        , instr_bus_("INSTR", mem_, rng_)
+        , data_bus_ ("DATA",  mem_, rng_)
     {
         ctx_ = std::make_unique<VerilatedContext>();
         dut_ = std::make_unique<Vcve2_top>(ctx_.get(), "TOP");
@@ -249,8 +436,13 @@ public:
         mem_.load_hex(hex_path);
         init_inputs();
 
-        std::cout << "[Cve2Tb] Boot addr : 0x"
+        std::cout << "[Cve2Tb] Boot addr        : 0x"
                   << std::hex << boot_addr_ << std::dec << "\n";
+        std::cout << "[Cve2Tb] RNG seed          : " << rng_seed          << "\n";
+        std::cout << "[Cve2Tb] GNT probability   : "
+                  << GNT_PROB_NUM << "/" << GNT_PROB_DEN                   << "\n";
+        std::cout << "[Cve2Tb] Max RVALID delay  : +"
+                  << MAX_RVALID_DELAY << " cycles (on top of mandatory 1)\n";
     }
 
     ~Cve2Tb() {
@@ -268,40 +460,33 @@ public:
         for (uint32_t i = 0; i < cycles; ++i)
             raw_tick();
         dut_->rst_ni = 1;
+        instr_bus_.reset();
+        data_bus_.reset();
         std::cout << "[Cve2Tb] Reset released after " << cycles << " cycles.\n";
     }
 
     // -------------------------------------------------------------------------
     // step() – advance one complete clock cycle
     //
-    // Combinational input sequence each call:
+    // Inputs are applied at the NEGATIVE edge so they are fully stable well
+    // before the next rising edge samples them:
     //
-    //  A) De-assert GNT from the previous cycle.
-    //  B) If a request was captured (granted) last cycle:
-    //       → assert RVALID=1 and drive RDATA (this is cycle N+1 vs grant N).
-    //  C) Sample the DUT's current req/addr/we/be/wdata outputs.
-    //  D) If a new request is pending (and we are not already busy):
-    //       → assert GNT=1 and latch the request details.
-    //       → for writes: commit to memory now (wdata is already stable).
-    //  E) Rising edge: eval(), capture RVFI, dump waveform.
-    //  F) Falling edge: eval(), dump waveform.
+    //  1. Rising edge : eval(), capture RVFI, dump waveform.
+    //  2. Falling edge: eval(), dump waveform.
+    //  3. SlowBus::tick() reads the DUT outputs that are now stable after the
+    //     falling edge and drives new GNT/RVALID/RDATA values.  These remain
+    //     stable on the inputs until the next rising edge.
+    //
+    // Timeline:
+    //   … negedge(N-1) → tick() drives inputs for cycle N
+    //        → posedge(N) → DUT latches inputs, RVFI captured
+    //        → negedge(N) → tick() drives inputs for cycle N+1 …
     // -------------------------------------------------------------------------
     void step() {
         if (halted_) return;
 
-        // A: de-assert GNT (it was pulsed for exactly one cycle last step)
-        dut_->instr_gnt_i = 0;
-        dut_->data_gnt_i  = 0;
-
-        // B: drive RVALID/RDATA for the previously granted request
-        drive_instr_rvalid();
-        drive_data_rvalid();
-
-        // C+D: sample new requests and grant them
-        grant_instr_req();
-        grant_data_req();
-
-        // E: rising edge
+        // ── Rising edge ───────────────────────────────────────────────────
+        // Inputs were already driven at the previous negedge (or by reset()).
         dut_->clk_i = 1;
         dut_->eval();
         ctx_->timeInc(1);
@@ -310,8 +495,37 @@ public:
 #endif
         capture_rvfi();
 
-        // F: falling edge
+        // ── Falling edge ──────────────────────────────────────────────────
         dut_->clk_i = 0;
+
+        // ── Drive inputs at negedge (stable for the upcoming posedge) ─────
+        // Read DUT outputs that are now settled after the falling edge, then
+        // compute and apply the new bus inputs for the next cycle.
+        {
+            uint8_t gnt, rvalid, err;
+            uint32_t rdata;
+            instr_bus_.tick(
+                dut_->instr_req_o, dut_->instr_addr_o,
+                /*we=*/0, /*be=*/0xF, /*wdata=*/0,
+                gnt, rvalid, rdata, err);
+            dut_->instr_gnt_i    = gnt;
+            dut_->instr_rvalid_i = rvalid;
+            dut_->instr_rdata_i  = rdata;
+            dut_->instr_err_i    = err;
+        }
+        {
+            uint8_t gnt, rvalid, err;
+            uint32_t rdata;
+            data_bus_.tick(
+                dut_->data_req_o,  dut_->data_addr_o,
+                dut_->data_we_o,   dut_->data_be_o,  dut_->data_wdata_o,
+                gnt, rvalid, rdata, err);
+            dut_->data_gnt_i    = gnt;
+            dut_->data_rvalid_i = rvalid;
+            dut_->data_rdata_i  = rdata;
+            dut_->data_err_i    = err;
+        }
+
         dut_->eval();
         ctx_->timeInc(1);
 #ifdef TRACE
@@ -323,6 +537,9 @@ public:
             std::cerr << "[Cve2Tb] Max cycles reached.\n";
             halted_ = true;
         }
+
+
+
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────
@@ -358,91 +575,6 @@ public:
 
 private:
     // -----------------------------------------------------------------------
-    // Pending-request registers  (one slot per bus)
-    //
-    // Filled when we assert GNT, consumed one cycle later when we assert RVALID.
-    // We only support one outstanding transaction per bus at a time, which is
-    // the minimum required by the CVE2 spec (it never issues a second request
-    // before seeing RVALID for the first one under normal operation).
-    // -----------------------------------------------------------------------
-    struct Pending {
-        bool     valid = false;
-        uint32_t addr  = 0;
-        bool     we    = false;  // data bus only
-        uint8_t  be    = 0;     // data bus only
-        uint32_t wdata = 0;     // data bus only
-    };
-
-    Pending instr_pend_;
-    Pending data_pend_;
-
-    // -----------------------------------------------------------------------
-    // Instruction bus helpers
-    // -----------------------------------------------------------------------
-
-    void grant_instr_req() {
-        // Only grant if the DUT is requesting AND we have no pending rvalid
-        if (dut_->instr_req_o && !instr_pend_.valid) {
-            instr_pend_ = { true, dut_->instr_addr_o, false, 0, 0 };
-            dut_->instr_gnt_i = 1;
-        } else {
-            dut_->instr_gnt_i = 0;
-        }
-    }
-
-    void drive_instr_rvalid() {
-        if (instr_pend_.valid) {
-            dut_->instr_rvalid_i = 1;
-            dut_->instr_rdata_i  = mem_.read32(instr_pend_.addr);
-            dut_->instr_err_i    = 0;
-            instr_pend_.valid    = false;   // slot now free
-        } else {
-            dut_->instr_rvalid_i = 0;
-            dut_->instr_rdata_i  = 0;
-            dut_->instr_err_i    = 0;
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Data bus helpers
-    // -----------------------------------------------------------------------
-
-    void grant_data_req() {
-        if (dut_->data_req_o && !data_pend_.valid) {
-            bool we = static_cast<bool>(dut_->data_we_o);
-            data_pend_ = { true,
-                           dut_->data_addr_o,
-                           we,
-                           dut_->data_be_o,
-                           dut_->data_wdata_o };
-            dut_->data_gnt_i = 1;
-
-            // Writes: commit data to memory at GNT time.
-            // The wdata lines are stable when req/gnt are asserted.
-            if (we)
-                mem_.write32(data_pend_.addr, data_pend_.wdata, data_pend_.be);
-        } else {
-            dut_->data_gnt_i = 0;
-        }
-    }
-
-    void drive_data_rvalid() {
-        if (data_pend_.valid) {
-            dut_->data_rvalid_i = 1;
-            dut_->data_err_i    = 0;
-            // For loads: present the data; for stores: rdata is don't-care
-            dut_->data_rdata_i  = data_pend_.we
-                                  ? 0u
-                                  : mem_.read32(data_pend_.addr);
-            data_pend_.valid    = false;
-        } else {
-            dut_->data_rvalid_i = 0;
-            dut_->data_rdata_i  = 0;
-            dut_->data_err_i    = 0;
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Tie all unused inputs to safe constants
     // -----------------------------------------------------------------------
     void init_inputs() {
@@ -472,15 +604,14 @@ private:
 
         // CV-X-IF – not used, tie all signals to zero.
         //
-        // x_result_i is a packed structs in SystemVerilog.
-        // Verilator represents them as VlWide<N> when they exceed 64 bits.
+        // x_result_i is a packed struct in SystemVerilog.
+        // Verilator represents it as VlWide<N> when it exceeds 64 bits.
         // VlWide<N> does not support plain "= 0" assignment; use vlwide_zero()
         // to zero every 32-bit word in the underlying storage array.
-
         dut_->x_issue_ready_i  = 0;
         dut_->x_issue_resp_i   = 0;
         dut_->x_result_valid_i = 0;
-        vlwide_zero(dut_->x_result_i);       // x_result_t      (>64 bits)
+        vlwide_zero(dut_->x_result_i);
 
         // Interrupts – all deasserted
         dut_->irq_software_i = 0;
@@ -500,7 +631,9 @@ private:
         dut_->eval();
     }
 
-    // One posedge + negedge without touching bus logic (used by reset())
+    // One posedge + negedge without bus logic (used by reset()).
+    // After the negedge we leave all bus inputs at their idle/zero state;
+    // the first real tick() call will happen at the negedge after reset() returns.
     void raw_tick() {
         dut_->clk_i = 1; dut_->eval(); ctx_->timeInc(1);
 #ifdef TRACE
@@ -510,6 +643,7 @@ private:
 #ifdef TRACE
         tfp_->dump(ctx_->time());
 #endif
+        // Bus inputs remain at idle (set by init_inputs / previous tick).
         ++cycle_;
     }
 
@@ -551,11 +685,15 @@ private:
 #ifdef TRACE
     std::unique_ptr<VerilatedVcdC>    tfp_;
 #endif
-    Cve2Memory mem_;
-    uint32_t   boot_addr_;
-    uint64_t   max_cycles_;
-    uint64_t   cycle_      = 0;
-    bool       halted_     = false;
-    bool       rvfi_valid_ = false;
-    RvfiInsn   rvfi_       = {};
+    Cve2Memory   mem_;
+    uint32_t     boot_addr_;
+    uint64_t     max_cycles_;
+    uint64_t     cycle_      = 0;
+    bool         halted_     = false;
+    bool         rvfi_valid_ = false;
+    RvfiInsn     rvfi_       = {};
+
+    std::mt19937 rng_;           ///< shared RNG – both buses draw from it
+    SlowBus      instr_bus_;
+    SlowBus      data_bus_;
 };
