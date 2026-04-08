@@ -37,8 +37,8 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -92,12 +92,33 @@ inline void vlwide_zero(VlWide<N>& w) {
 }
 
 // ============================================================================
-// Cve2Memory  –  flat C++ byte-addressed memory
+// Cve2Memory  –  flat C++ byte-addressed memory (heap-allocated)
+//
+// Memory regions are allocated on the heap to avoid stack overflow with
+// large RAM sizes (16 MB default). Uses std::unique_ptr for automatic
+// cleanup and exception safety.
 // ============================================================================
 
 class Cve2Memory {
 public:
-    Cve2Memory() { boot_.fill(0); ram_.fill(0); }
+    Cve2Memory()
+        : boot_(std::make_unique<uint8_t[]>(BOOT_SIZE)),
+          ram_(std::make_unique<uint8_t[]>(RAM_SIZE))
+    {
+        // Zero-initialize both memory regions
+        std::memset(boot_.get(), 0, BOOT_SIZE);
+        std::memset(ram_.get(),  0, RAM_SIZE);
+    }
+
+    // Explicitly delete copy operations (unique_ptr is move-only)
+    Cve2Memory(const Cve2Memory&) = delete;
+    Cve2Memory& operator=(const Cve2Memory&) = delete;
+
+    // Enable move operations
+    Cve2Memory(Cve2Memory&&) noexcept = default;
+    Cve2Memory& operator=(Cve2Memory&&) noexcept = default;
+
+    ~Cve2Memory() = default;
 
     // Load a Verilog objcopy hex file  (@ADDR / HEX_BYTE ... format)
     // Same format as used by SpikeBridge::load_hex()
@@ -137,7 +158,7 @@ public:
         if (addr >= BOOT_BASE && addr < BOOT_BASE + BOOT_SIZE)
             return boot_[addr - BOOT_BASE];
         if (addr >= RAM_BASE  && addr < RAM_BASE  + RAM_SIZE)
-            return ram_ [addr - RAM_BASE];
+            return ram_[addr - RAM_BASE];
         return 0x00;   // unmapped → return 0, no bus error signalled
     }
 
@@ -145,7 +166,7 @@ public:
         if (addr >= BOOT_BASE && addr < BOOT_BASE + BOOT_SIZE)
             boot_[addr - BOOT_BASE] = val;
         else if (addr >= RAM_BASE && addr < RAM_BASE + RAM_SIZE)
-            ram_ [addr - RAM_BASE]  = val;
+            ram_[addr - RAM_BASE] = val;
         // unmapped writes silently ignored
     }
 
@@ -155,9 +176,19 @@ public:
             std::printf("  0x%08x : 0x%08x\n", addr + i*4, read32(addr + i*4));
     }
 
+    // Direct access to memory regions (for advanced use cases)
+    uint8_t* boot_data() { return boot_.get(); }
+    uint8_t* ram_data()  { return ram_.get();  }
+    const uint8_t* boot_data() const { return boot_.get(); }
+    const uint8_t* ram_data()  const { return ram_.get();  }
+
+    // Memory region sizes
+    static constexpr uint32_t boot_size() { return BOOT_SIZE; }
+    static constexpr uint32_t ram_size()  { return RAM_SIZE;  }
+
 private:
-    std::array<uint8_t, BOOT_SIZE> boot_;
-    std::array<uint8_t, RAM_SIZE>  ram_;
+    std::unique_ptr<uint8_t[]> boot_;   // 4 KB Boot ROM (heap)
+    std::unique_ptr<uint8_t[]> ram_;    // 16 MB RAM (heap)
 };
 
 // ============================================================================

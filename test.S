@@ -14,6 +14,7 @@
    - RV64: riscv64-unknown-elf-gcc -march=rv64gc -mabi=lp64d -T link.ld test.S -o test.elf
    
    ======================================================================== */
+//#define USE_FLOATING_POINT
 
 .section .boot, "ax"
 .global _boot
@@ -25,9 +26,13 @@ _boot:
 
 .section .rodata, "a"
 .align 2
+#ifdef USE_FLOATING_POINT
 val_init: .float 1.0
 val_incr: .float 3.3
-
+#else
+val_init: .word 1
+val_incr: .word 3
+#endif
 
 .section .text, "ax"
 .global _start
@@ -47,9 +52,10 @@ _start:
        0x6000 = 0110 0000 0000 0000 (binary)
        This sets FS=11 (dirty state) for FPU access
        ==================================================================== */
+#ifdef USE_FLOATING_POINT
     li x5, 0x6000          /* Load immediate 0x6000 into x5 */
     csrs mstatus, x5       /* Set bits in mstatus from x5 */
-
+#endif
     /* ====================================================================
        Step 2: Initialize working registers
        ==================================================================== */
@@ -65,8 +71,13 @@ _start:
        ==================================================================== */
     la x3, val_init        /* Load address of val_init into x3 */
     la x4, val_incr        /* Load address of val_incr into x4 */
+#ifdef USE_FLOATING_POINT
     flw f3, 0(x3)          /* Load float from [x3] into f3 (1.0) */
     flw f4, 0(x4)          /* Load float from [x4] into f4 (3.3) */
+#else
+     lw x3, 0(x3)           /* Load word from [x3] */
+     lw x4, 0(x4)           /* Load word from [x4] */
+ #endif
 
     /* ====================================================================
        Step 4: Main Loop
@@ -82,7 +93,12 @@ _start:
        ==================================================================== */
 loop:
     addi x1, x1, 1         /* x1 = x1 + 1 (increment counter) */
+
+#ifdef USE_FLOATING_POINT
     fadd.s f3, f3, f4      /* f3 = f3 + f4 (floating-point add) */
+#else
+    add x3, x3, x4         /* x3 = x3 + x4 (integer add) */
+#endif
     blt x1, x2, loop       /* Branch to loop if x1 < x2 */
 
     /* ====================================================================
