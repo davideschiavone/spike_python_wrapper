@@ -1,8 +1,15 @@
 import struct
-import spike_py
 import sys
 import traceback
 import os
+
+# Get the path to the folder containing spike_py.so
+wrapper_path = os.path.abspath("./spike_wrapper")
+
+if wrapper_path not in sys.path:
+    sys.path.append(wrapper_path)
+
+import spike_py
 
 # ============================================================================
 # ABI Register Names

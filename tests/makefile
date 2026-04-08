@@ -1,16 +1,5 @@
 # ============================================================================
-# RISC-V Spike Wrapper - Configurable Makefile
-# ============================================================================
-# This Makefile supports building both RV32 and RV64 targets with
-# various ISA extensions.
-#
-# USAGE:
-#   make test                    # Compile test program with default ISA
-#   make test MARCH=-march=rv32imac
-#   make test MARCH=-march=rv64gc
-#   make spike_wrapper           # Compile Python wrapper
-#   make clean                   # Remove generated files
-#
+# RISC-V test - Makefile for building test programs
 # ============================================================================
 
 # ============================================================================
@@ -85,13 +74,11 @@ help:
 	@echo "  make [target] [OPTIONS]"
 	@echo ""
 	@echo "TARGETS:"
-	@echo "  all              - Build test program and Python wrapper (default)"
 	@echo "  test             - Compile assembly test program (test.elf/test.hex)"
-	@echo "  test.elf         - Compile test.S into ELF"
-	@echo "  test.bin         - Convert ELF to binary"
-	@echo "  test.dis         - Generate disassembly"
-	@echo "  test.hex         - Generate Verilog hex file for simulation"
-	@echo "  spike_wrapper    - Compile C++ Pybind11 wrapper"
+	@echo "  build/test.elf   - Compile test.S into ELF"
+	@echo "  build/test.bin   - Convert ELF to binary"
+	@echo "  build/test.dis   - Generate disassembly"
+	@echo "  build/test.hex   - Generate Verilog hex file for simulation"
 	@echo "  clean            - Remove generated files"
 	@echo "  help             - Show this help message"
 	@echo ""
@@ -121,38 +108,31 @@ help:
 # Test Program Compilation (Assembly -> ELF -> Binary -> Hex)
 # ============================================================================
 
-test: test.elf test.bin test.dis test.hex
+test: build build/test.elf build/test.bin build/test.dis build/test.hex
 
-test.elf: test.S link.ld
-	@echo "[COMPILE] test.S -> test.elf"
+build:
+	@mkdir -p build
+
+build/test.elf: test.S link.ld
+	@echo "[COMPILE] test.S -> build/test.elf"
 	@echo "  MARCH: $(MARCH)"
 	$(CC) $(MARCH) $(LDFLAGS) $< -o $@
 	@echo "  [OK] Output: test.elf"
 
-test.bin: test.elf
-	@echo "[BINARY] test.elf -> test.bin"
+build/test.bin: build/test.elf
+	@echo "[BINARY] build/test.elf -> build/test.bin"
 	$(OBJCOPY) -O binary $< $@
-	@echo "  [OK] Output: test.bin"
+	@echo "  [OK] Output: build/test.bin"
 
-test.dis: test.elf
-	@echo "[DISASM] test.elf -> test.dis"
+build/test.dis: build/test.elf
+	@echo "[DISASM] build/test.elf -> build/test.dis"
 	$(OBJDUMP) -D $< > $@
-	@echo "  [OK] Output: test.dis"
+	@echo "  [OK] Output: build/test.dis"
 
-test.hex: test.elf
-	@echo "[HEXGEN] test.elf -> test.hex (Verilog format)"
+build/test.hex: build/test.elf
+	@echo "[HEXGEN] build/test.elf -> build/test.hex (Verilog format)"
 	$(OBJCOPY) -O verilog $< $@
-	@echo "  [OK] Output: test.hex"
-
-# ============================================================================
-# C++ Spike Wrapper Compilation (Pybind11)
-# ============================================================================
-
-spike_wrapper:
-	@echo "[BUILD] C++ Spike Wrapper (Python module)"
-	rm -f spike_py.cpython-*.so
-	sh ./compile_wrapper.sh
-	@echo "[OK] Output: spike_py.cpython-*.so"
+	@echo "  [OK] Output: build/test.hex"
 
 # ============================================================================
 # Clean Generated Files
@@ -160,7 +140,7 @@ spike_wrapper:
 
 clean:
 	@echo "[CLEAN] Removing generated files..."
-	rm -f test.elf test.bin test.dis test.hex
+	rm -f build/test.elf build/test.bin build/test.dis build/test.hex
 	@echo "[OK] Clean complete"
 
 # ============================================================================

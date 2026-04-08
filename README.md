@@ -36,6 +36,7 @@ make -j16
 
 
 ```
+cd tests
 make test
 ```
 
@@ -52,11 +53,16 @@ Make sure you have `pip install pybind11`
 Then,
 
 ```
+cd spike_wrapper
 make spike_wrapper
 ```
 
-## Start tracer
+## Start Python Spike tracer
 
 ```
-python trace_spike.py
+python trace_spike.py tests/build/test rv32imc
 ```
+
+## CVE2 verilated wrapper with the RVFI trace
+
+See ./cve2/README_CVE2_TB.md
