@@ -29,9 +29,11 @@ _boot:
 #ifdef USE_FLOATING_POINT
 val_init: .float 1.0
 val_incr: .float 3.3
+val_result: .float 0.0
 #else
 val_init: .word 1
 val_incr: .word 3
+val_result: .word 0
 #endif
 
 .section .text, "ax"
@@ -100,6 +102,14 @@ loop:
     add x3, x3, x4         /* x3 = x3 + x4 (integer add) */
 #endif
     blt x1, x2, loop       /* Branch to loop if x1 < x2 */
+
+   la x4, val_result      /* Load address of val_result into x4 */
+
+#ifdef USE_FLOATING_POINT
+   fsw f3, 0(x4)          /* Store float from f3 into [x4] */
+#else
+   sw  x3, 0(x4)           /* Store word from x3 into [x4] */
+#endif
 
     /* ====================================================================
        Step 5: System Call

@@ -93,6 +93,9 @@ run: cve2_tb
 run_trace: cve2_tb_trace
 	./cve2_tb_trace $(HEX) $(MAX_CYCLES)
 
+view_trace:
+	gtkwave cve2_wave.vcd cve2.gtkw
+
 # 3. Build Lib: Just a wrapper for the build (Verilator --build handles the make)
 build_lib: verilate
 	@echo "--- Library created at $(LIB_A) ---"
